@@ -1,0 +1,201 @@
+---
+title: "hw5"
+author: "Brandon Goh"
+format: html
+embed-resources: true
+---
+
+```{r, include=FALSE}
+library(lme4)
+library(ggplot2)
+library(lmerTest)
+library(tidyverse)
+library(emmeans)
+library(logistf)
+library(cowplot)
+library(kableExtra)
+```
+## Introduction
+
+This report analyzes data from a psychological experiment conducted to investigate predictive processing during language comprehension. The study, conducted by E. Matthew Husband and referenced in the paper titled "Prediction in the maze: Evidence for probabilistic pre-activation from the English a/an contrast," focuses on how participants predict upcoming linguistic content based on morphosyntactic and phonotactic constraints. Key to the study is the maze task, where participants are presented with sentences that require choosing between a correct continuation and a distractor, effectively measuring the incremental processing involved in language comprehension.
+
+### Hypothesis and Predictions
+
+The central hypothesis of the study is that comprehenders pre-activate word forms based on the context that precedes a high-cloze probability target word. The study predicts that:
+
+- Articles and nouns that are unexpected, given the preceding context, will elicit slower response times.
+- Response times will inversely correlate with noun cloze probabilities, showing that higher predictability speeds up comprehension.
+
+### Example Sentences from Stimuli
+
+The experiment used sentences like:
+
+- Expected: 
+The highlight of Jack’s trip to India was when he got to ride an elephant in the parade.
+x-x-x subjected wish Nuclei tons cent Ratio boys file miss skin mean inch lie extends pm knew trends.
+You never forget how to ride a bicycle once you’ve learned.
+x-x-x hours animal door fund onto lack deposits glad author eastern.
+
+- Unexpected:
+The highlight of Jack’s trip to India was when he got to ride a bicycle in the parade.
+x-x-x subjected wish Nuclei tons cent Ratio boys file miss skin mean inch lie extends pm knew trends.
+You never forget how to ride an elephant once you’ve learned.
+x-x-x hours animal door fund onto lack deposits glad author eastern.
+
+These sentences were used to test the predictive processing abilities of the participants by varying the article and noun based on the predictability set by the preceding sentence context.
+
+###Data Dictionary
+```{r}
+data_dictionary <- tibble::tribble(
+  ~Variable,                             ~Description,
+  "Results index",                       "Result index number",
+  "Time",                                "Timestamp of the result entry",
+  "Counter",                             "Counter for the number of entries",
+  "Hash",                                "Unique hash identifier for each participant",
+  "Logged in as experiment owner?",      "Indicates if the user was logged in as the experiment owner (if known)",
+  "Controller name",                     "Name of the controller used in the experiment either maze or form",
+  "Item number",                         "Item number in the experiment",
+  "Element number",                      "Element number within an item",
+  "Type",                                "Type of element or response",
+  "Group",                               "Group identifier in the experiment",
+  "Field name",                          "Name of the field in the data collection form",
+  "Field value",                         "Value entered for the field in the data collection form",
+  "Word number",                         "Sequential number of the word in the stimulus",
+  "Word",                                "The word presented as stimulus",
+  "Alternative",                         "Alternative word presented as part of the stimulus",
+  "Word on (0=left, 1=right)",           "Indicator of the side on which the word appeared",
+  "Correct",                             "Indicator of whether the response was correct",
+  "Reading time to first answer",        "Time taken to provide the first answer",
+  "Sentence",                            "Sentence used in the stimulus",
+  "Total time to correct answer",        "Total time taken to arrive at the correct answer",
+  "Question (NULL if none)",             "The question posed, if any",
+  "Answer",                              "The answer provided by the participant",
+  "Whether or not answer was correct",   "Indicator of whether the provided answer was correct (NULL if N/A)",
+  "Time taken to answer",                "Time taken to answer the question"
+)
+
+# Generate the data dictionary table
+kable(data_dictionary, format = "html") %>%
+  kable_styling(full_width = F)
+```
+
+```{r, include=FALSE}
+#directory <- "C:\\Users\\cpgl0052\\Dropbox\\Research\\delong maze\\"
+here::i_am("hw5/hw5.qmd")
+library(here)
+d <- read.csv(here("hw5/data/delong maze 40Ss.csv"), 
+              header = 0, sep = ",", comment.char = "#", strip.white = T,
+              col.names = c("Index","Time","Counter","Hash","Owner","Controller","Item","Element","Type","Group","FieldName","Value","WordNum","Word","Alt","WordOn","CorrWord","RT","Sent","TotalTime","Question","Resp","Acc","RespRT"));
+```
+```{r, include=FALSE}
+demo <- d[d$Controller == "Form",1:12]
+names(demo) <- c("Subject","MD5","TrialType","Number","Element","Experiment","Item","Field","Response","X","field","resp")
+demo <- as.data.frame(lapply(demo, function (x) if (is.factor(x) | is.character(x)) factor(x) else x)) 
+
+resp <- d[d$Controller == "Question" & substr(d$Type,1,4) != "prac", c(1:10,21:24)]
+resp <- separate(data = resp, col = Type, into = c("exp", "item", "expect", "position", "pos", "cloze", "art.cloze", "n.cloze"), sep = "\\.", convert = TRUE, fill = "right")
+resp <- as.data.frame(lapply(resp, function (x) if (is.factor(x) | is.character(x)) factor(x) else x))
+resp$Acc <- as.numeric(as.character(resp$Acc))
+resp$RespRT <- as.numeric(as.character(resp$RespRT))
+
+rt <- d[d$Controller == "Maze" & substr(d$Type,1,4) != "prac", c(1:10,13:20)]
+rt <- separate(data = rt, col = Type, into = c("exp", "item", "expect", "position", "pos", "cloze", "art.cloze", "n.cloze"), sep = "\\.", convert = TRUE, fill = "right")
+rt <- as.data.frame(lapply(rt, function (x) if (is.factor(x) | is.character(x)) factor(x) else x))
+rt$WordNum <- as.numeric(as.character(rt$WordNum))
+rt$RT <- as.numeric(as.character(rt$RT))
+rt$TotalTime <- as.numeric(as.character(rt$TotalTime))
+rt$Acc <- as.numeric(as.character(recode(rt$CorrWord, yes = "1", no = "0")))
+rt$n.cloze.scale <- scale(rt$n.cloze)
+rt$art.cloze.scale <- scale(rt$art.cloze)
+
+# Removing item 29 due to incorrect noun pairing
+resp <- resp[resp$item != 29,]
+rt <- rt[rt$item != 29,]
+```
+
+
+### Participant Overview
+
+The study originally recruited `r length(unique(d$Hash))` participants, but data from one participant was lost, leaving us with data for `r length(unique(resp$Hash))` participants.
+
+### Statistics of participant ages
+Below is an output of the statistics of the participant ages including the mean, minimum, maximum and standard deviation.
+
+```{r}
+age_stats <- demo %>%
+  filter(field == "age") %>%
+  summarize(
+    mean_age = mean(as.numeric(as.character(resp))), 
+    minimum_age = min(as.numeric(as.character(resp))), 
+    maximum_age = max(as.numeric(as.character(resp))),
+    age_standard_deviation = sd(as.numeric(as.character(resp)))
+  )
+
+kable(age_stats, format = "html", escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+
+```{r, include=FALSE}
+rt.s <- rt[rt$Hash != '9dAvrH0+R6a0U5adPzZSyA',]
+
+rt.s$rgn.fix <- rt.s$WordNum - rt.s$pos + 1
+rt.s$word.num.z <- scale(rt.s$WordNum)
+rt.s$word.len <- nchar(as.character(rt.s$Word))
+rt.s$Altword.len <- nchar(as.character(rt.s$Alt))
+contrasts(rt.s$expect) <- c(-.5,.5)
+rt.s$item.expect <- paste(rt.s$item, rt.s$expect, sep=".")
+delong.items <- rt.s %>% filter(rgn.fix == 0) %>% distinct(item.expect, .keep_all = TRUE)
+#Response accuracy
+rt.s %>% filter(rgn.fix > -4 & rgn.fix < 5) %>% summarize(n=n(), acc=mean(Acc), sd=sd(Acc), error=1-acc)
+rt.s %>% filter(rgn.fix == 0) %>% summarize(n=n(), acc=mean(Acc), sd=sd(Acc), error=1-acc)
+rt.s %>% filter(rgn.fix == 1) %>% summarize(n=n(), acc=mean(Acc), sd=sd(Acc), error=1-acc)
+rt.s %>% filter(rgn.fix > -4 & rgn.fix < 4) %>% group_by(Hash) %>% summarize(n=n(), acc=mean(Acc), sd=sd(Acc), error=1-acc) %>% mutate(keep = acc > mean(acc)-2*sd(acc)) %>% arrange(acc) %>% as.data.frame()
+#remove 2 (73.5% and 81.9%) - all others >90%
+
+rt.s.filt <- rt.s[rt.s$Hash != "gyxidIf0fqXBM7nxg2K7SQ" & rt.s$Hash != "f8dC3CkleTBP9lUufzUOyQ",]
+
+rt.s.filt %>% filter(rgn.fix > -4 & rgn.fix < 5) %>% summarize(n=n(), acc=mean(Acc), sd=sd(Acc), error=1-acc)
+rt.s.filt %>% filter(rgn.fix == 0) %>% summarize(n=n(), acc=mean(Acc), sd=sd(Acc), error=1-acc)
+rt.s.filt %>% filter(rgn.fix == 1) %>% summarize(n=n(), acc=mean(Acc), sd=sd(Acc), error=1-acc)
+#Analyze Response Times
+rt.s.filt %>% filter(rgn.fix > -4 & rgn.fix < 5) %>% filter(Acc == 1) %>% summarize(n=n(), rt=mean(RT), rt.sd=sd(RT), med=median(RT), rt.min=min(RT), rt.max=max(RT))
+rt.s.filt %>% filter(rgn.fix > -4 & rgn.fix < 5) %>% filter(Acc == 1) %>% group_by(Hash) %>% summarize(n=n(), rt=mean(RT), rt.sd=sd(RT), med=median(RT), rt.min=min(RT), rt.max=max(RT)) %>% mutate(keep = rt > mean(rt)-2*sd(rt) | rt < mean(rt)+2*sd(rt)) %>% as.data.frame()
+#all Ss kept
+
+#Filter out reading errors
+rt.s.rgn <- rt.s.filt %>% filter(rgn.fix > -4 & rgn.fix < 5) %>% filter(Acc == 1) %>% as.data.frame()
+hist(rt.s.rgn$RT, breaks=100)
+hist(log(rt.s.rgn$RT), breaks=100)
+rgn.rt.raw <- rt.s.filt %>% filter(rgn.fix > -4 & rgn.fix < 5) %>% filter(Acc == 1) %>% group_by(rgn.fix, expect) %>% summarize(n=n(), subj=length(unique(Hash)), rt=mean(RT), sd=sd(RT), stderr=sd/sqrt(subj)) %>% as.data.frame()
+rgn.rt.raw$rgn <- as.factor(recode(rgn.rt.raw$rgn.fix, "-3"="CW-3", "-2"="CW-2", "-1"="CW-1", "0"="art", "1"="n","2"="CW+1", "3"="CW+2", "4"="CW+3"))
+rgn.rt.raw$rgn <- ordered(rgn.rt.raw$rgn, levels = c("CW-3", "CW-2", "CW-1", "art", "n", "CW+1", "CW+2", "CW+3"))
+```
+### Data Cleaning
+
+Data cleaning involved removing trials with coding errors and error responses. Reading errors were filtered out, Error and post-error responses were removed. After this process, `r nrow(rt.s.rgn)` rows of data remained for analysis. Initially there were `r nrow(d)` rows of data collected.
+
+### Response times
+
+A graph of participant response times based on the noun and expected vs unexpected condition
+```{r}
+ggplot(rgn.rt.raw, aes(x=rgn, y=rt, group=expect, shape=expect)) +
+  geom_line(stat = "identity", position=position_dodge(width=.3)) +
+  geom_point(stat = "identity", position=position_dodge(width=.3), size=3) +
+  geom_errorbar(aes(ymin = rt-stderr, ymax = rt+stderr), width=.15, position=position_dodge(width=.3)) +
+  scale_shape_manual(name="", labels=c("Expected", "Unexpected"), values = c(21,19)) + 
+  xlab("Word") + ylab("Reading Time (msec)") + 
+  theme_bw()
+```
+### Table
+Average error rates across Expectation by word. Standard errors by subject are given in paratheses.
+```{r}
+df_results <- tibble::tribble(
+   ~Condition,  ~`CW-3`,    ~`CW-2`,    ~`CW-1`,    ~`art`,   ~`n`,     ~`CW+1`,   ~`CW+2`,   ~`CW+3`,
+  "Expected",   "2.6 (2.7)", "3.1 (2.9)", "3.2 (2.9)", "4.0 (3.3)", "1.6 (2.1)", "3.0 (2.9)", "2.9 (2.8)", "2.3 (2.5)",
+  "Unexpected", "3.1 (2.9)", "3.1 (2.9)", "2.5 (2.6)", "2.7 (2.7)", "2.5 (2.6)", "2.5 (2.6)", "3.9 (3.2)", "2.0 (2.3)"
+)
+
+kable(df_results, format = "html", escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
